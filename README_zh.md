@@ -92,6 +92,17 @@ cd /home/pi/e-ink-reader
 sudo chmod -R 755 /home/pi/e-ink-reader
 ```
 
+### 安装LG库
+
+```shell
+sudo apt update && sudo apt install python3-setuptools wget
+wget https://github.com/joan2937/lg/archive/master.zip
+unzip master.zip
+cd lg-master
+make
+sudo make install
+```
+
 ### 配置Python环境
 系统默认的python版本为3.13，而MediaPipe模型需要Python 3.9-3.12，需要重新指定python路径（系统中已安装python3.10）：
 
@@ -192,7 +203,7 @@ cd /home/pi/e-ink-reader/demo-inkscreen-reader
 ## 目录结构
 
 ```
-e-ink-reader/
+demo-inkscreen-reader/
 ├── README.md                 #项目说明文档
 ├── README_zh.md             #中文版说明文档
 ├── bulid.sh                 #项目构建脚本
@@ -206,7 +217,6 @@ e-ink-reader/
                └── c/              #C源码相关文件
                     └── examples/      #C示例程序
                         └── EPD_7in5_V2_reader_txt.c   # 主程序入口文件
-│   └── lg-master/           #LGPIO库源码目录
 └── src/
     └── main.py              #主程序入口文件
 ```

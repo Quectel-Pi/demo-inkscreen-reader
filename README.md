@@ -90,6 +90,17 @@ cd /home/pi/e-ink-reader
 sudo chmod -R 755 /home/pi/e-ink-reader
 ```
 
+### Install LG library
+
+```shell
+sudo apt update && sudo apt install python3-setuptools wget
+wget https://github.com/joan2937/lg/archive/master.zip
+unzip master.zip
+cd lg-master
+make
+sudo make install
+```
+
 ### Configure Python Environment
 System default Python is 3.13, but MediaPipe requires Python 3.9-3.12 (Python 3.10 is pre-installed):
 
@@ -190,7 +201,7 @@ cd /home/pi/e-ink-reader/demo-inkscreen-reader
 ## Directory Structure
 
 ```
-e-ink-reader/
+demo-inkscreen-reader/
 ├── README.md                 # Project description document
 ├── README_zh.md             # Chinese version of description document
 ├── bulid.sh                 # Project build script
@@ -204,7 +215,6 @@ e-ink-reader/
                └── c/              # C source code related files
                     └── examples/      # C example programs
                         └── EPD_7in5_V2_reader_txt.c   # Main program entry file
-│   └── lg-master/           # LGPIO library source code directory
 └── src/
     └── main.py              # Main program entry file
 ```

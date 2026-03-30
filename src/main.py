@@ -226,11 +226,10 @@ while True:
                     # Skip subsequent eye movement control logic to avoid duplicate page turns
                     continue
                 
-                # 确保lm变量已定义
                 if result.multi_face_landmarks and len(result.multi_face_landmarks) > 0:
                     lm = result.multi_face_landmarks[0].landmark
                 else:
-                    continue  # 如果没有检测到人脸标记点，跳过本次循环
+                    continue  
             
 
             # Get eye center points
