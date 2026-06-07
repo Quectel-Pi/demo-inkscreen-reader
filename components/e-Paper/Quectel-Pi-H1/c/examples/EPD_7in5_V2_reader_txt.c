@@ -19,12 +19,14 @@
 #include "DEV_Config.h"
 #include <sys/types.h>  // Add this header to define DT_REG
 #include <poll.h>
+#include <ctype.h>
+#include <iconv.h>
 
 // Define custom screen off and on signals
 #define CUSTOM_SCREEN_OFF_BTN BTN_LEFT
 #define CUSTOM_SCREEN_ON_BTN BTN_RIGHT
 
-#define BOOK_PATH "/home/pi/e-ink-reader/demo-inkscreen-reader/books"
+#define BOOK_PATH "./books"
 #define MAX_BOOK_SIZE (4* 1024 * 1024) // 4MB
 #define MAX_BOOKS 20
 #define MAX_HISTORY 500 // Record up to 500 page history entries
@@ -34,7 +36,19 @@
 #define FOOTER_HEIGHT   30  // Increase footer height to provide space for page numbers
 
 #define CONTENT_Y_START   (HEADER_HEIGHT + 5)  // Reduce margin at top of content area
+#define CONTENT_X_MARGIN  10 // Left/right margin for text content
 #define FOOTER_Y_START    (EPD_7IN5_V2_HEIGHT - FOOTER_HEIGHT)
+
+// Text layout tuning: 3pt before/after paragraph gap and 1.2x line height.
+#define PARAGRAPH_SPACING_PX 2
+
+// Chapter break: when a paragraph starts with "第X章/节/回", force a new page.
+#define CHAPTER_BREAK_MARKER '\f'
+
+// Font macros: change these in one place to control typography globally.
+#define BODY_EN_FONT Font20
+#define BODY_CN_FONT Font12CN
+
 
 // Function declarations
 void safe_truncate_filename(char* dest, const char* src, size_t dest_size);
@@ -74,6 +88,8 @@ static size_t g_processed_text_size = 0;
 
 // Current page starting offset (in bytes)
 static size_t g_current_char_offset = 0;
+// Start offset of the page currently shown on screen
+static size_t g_displayed_page_offset = 0;
 
 // History stack: record starting offset of each page (for precise backward navigation)
 static size_t history_stack[MAX_HISTORY];
@@ -207,6 +223,324 @@ typedef struct {
 // Add: Global character processor
 static CharProcessor char_processor = {gb2312_char_len, 1};
 
+static inline int body_en_char_width(void) {
+    return BODY_EN_FONT.Width;
+}
+
+static inline int body_cn_char_width(void) {
+    return BODY_CN_FONT.Width;
+}
+
+static inline int body_en_line_step(void) {
+    return (BODY_EN_FONT.Height * 12 + 9) / 10;
+}
+
+static inline int body_cn_line_step(void) {
+    return (BODY_CN_FONT.Height * 13 + 9) / 10;
+}
+
+static inline int body_first_line_indent_cn(void) {
+    return body_cn_char_width() * 2;
+}
+
+static inline int body_first_line_indent_en(void) {
+    return body_en_char_width() * 2;
+}
+
+static int is_ascii_closing_punct(unsigned char c) {
+    return (c == ',' || c == '.' || c == '!' || c == '?' ||
+            c == ';' || c == ':' || c == ')' || c == ']' ||
+            c == '}' || c == '>' || c == '"' || c == '\'');
+}
+
+static int is_gbk_closing_punct_at(const char* text, size_t size, size_t pos) {
+    if (!text || pos + 1 >= size) return 0;
+    unsigned char b0 = (unsigned char)text[pos];
+    unsigned char b1 = (unsigned char)text[pos + 1];
+
+    // Common GBK full-width closing punctuation.
+    if (b0 == 0xA3 && (b1 == 0xAC || b1 == 0xAE || b1 == 0xA1 || b1 == 0xBF ||
+                       b1 == 0xBA || b1 == 0xBB || b1 == 0xA9 || b1 == 0xBD ||
+                       b1 == 0xB1 || b1 == 0xAF)) {
+        return 1;
+    }
+
+    if (b0 == 0xA1 && (b1 == 0xA2 || b1 == 0xA3 || b1 == 0xB7 || b1 == 0xBF ||
+                       b1 == 0xA1 || b1 == 0xA8 || b1 == 0xA9)) {
+        return 1;
+    }
+    return 0;
+}
+
+static int is_gbk_opening_punct_at(const char* text, size_t size, size_t pos) {
+    if (!text || pos + 1 >= size) return 0;
+    unsigned char b0 = (unsigned char)text[pos];
+    unsigned char b1 = (unsigned char)text[pos + 1];
+
+    // Common GBK full-width opening punctuation.
+    if (b0 == 0xA3 && (b1 == 0xA8 || b1 == 0xDB || b1 == 0xB0 || b1 == 0xAE)) {
+        return 1;
+    }
+
+    if (b0 == 0xA1 && (b1 == 0xBE || b1 == 0xB6 || b1 == 0xB0 || b1 == 0xAA || b1 == 0xAE)) {
+        return 1;
+    }
+    return 0;
+}
+
+static void normalize_cn_punct_spacing_gbk(char* text, size_t* text_size) {
+    if (!text || !text_size || *text_size == 0) return;
+
+    size_t src = 0;
+    size_t dst = 0;
+    size_t n = *text_size;
+
+    while (src < n) {
+        int clen = char_processor.char_len(text, n, src);
+        if (clen <= 0) clen = 1;
+
+        // Trim spaces before Chinese closing punctuation.
+        if (clen == 2 && is_gbk_closing_punct_at(text, n, src)) {
+            while (dst > 0 && text[dst - 1] == ' ') {
+                dst--;
+            }
+        }
+
+        // Copy current character bytes.
+        for (int i = 0; i < clen && src + (size_t)i < n; i++) {
+            text[dst++] = text[src + (size_t)i];
+        }
+
+        // Trim spaces immediately after Chinese opening punctuation.
+        if (clen == 2 && is_gbk_opening_punct_at(text, n, src)) {
+            size_t next = src + (size_t)clen;
+            while (next < n && text[next] == ' ') {
+                next++;
+            }
+            src = next;
+            continue;
+        }
+
+        src += (size_t)clen;
+    }
+
+    text[dst] = '\0';
+    *text_size = dst;
+}
+
+static void normalize_ascii_double_quotes_to_gbk(char** text_ptr, size_t* text_size) {
+    if (!text_ptr || !*text_ptr || !text_size || *text_size == 0) return;
+
+    char* src = *text_ptr;
+    size_t n = *text_size;
+    size_t quote_count = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        if ((unsigned char)src[i] == 0x22) quote_count++;
+    }
+    if (quote_count == 0) return;
+
+    // Each ASCII double quote becomes one 2-byte GBK quote, so buffer grows by quote_count bytes.
+    size_t out_size = n + quote_count;
+    char* out = (char*)malloc(out_size + 1);
+    if (!out) return;
+
+    size_t si = 0;
+    size_t di = 0;
+    int in_quote = 0;
+    while (si < n) {
+        unsigned char c = (unsigned char)src[si];
+        if (c == 0x22) {
+            out[di++] = (char)0xA1;
+            out[di++] = in_quote ? (char)0xB1 : (char)0xB0;
+            in_quote = !in_quote;
+            si++;
+            continue;
+        }
+        out[di++] = src[si++];
+    }
+
+    out[di] = '\0';
+    free(*text_ptr);
+    *text_ptr = out;
+    *text_size = di;
+}
+
+static size_t collect_layout_line(const char* text, size_t text_size, size_t offset,
+                                  int start_x, int max_x,
+                                  char* line, size_t line_cap,
+                                  int* has_cn, int* saw_paragraph_break) {
+    size_t len = 0;
+    int x = start_x;
+    int line_start_x = start_x;
+    int in_ascii_word = 0;
+    size_t word_start_offset = offset;
+    size_t word_start_len = 0;
+
+    if (has_cn) *has_cn = 0;
+    if (saw_paragraph_break) *saw_paragraph_break = 0;
+
+    while (offset < text_size) {
+        unsigned char c = (unsigned char)text[offset];
+        if (c == '\n') {
+            if (saw_paragraph_break) *saw_paragraph_break = 1;
+            offset++;
+            break;
+        }
+        if (c == ' ' && x == line_start_x) {
+            offset++;
+            in_ascii_word = 0;
+            continue;
+        }
+        int is_ascii_word_char = (c < 0x80) && (isalnum(c) || c == '_' || c == '\'' || c == '-');
+        if (is_ascii_word_char && !in_ascii_word) {
+            word_start_offset = offset;
+            word_start_len = len;
+            in_ascii_word = 1;
+        } else if (!is_ascii_word_char) {
+            in_ascii_word = 0;
+        }
+        int bytes = char_processor.char_len(text, text_size, offset);
+        int width = (bytes > 1) ? body_cn_char_width() : body_en_char_width();
+        if (x + width > max_x) {
+            int is_closing_punct = 0;
+            if (bytes == 1) {
+                is_closing_punct = is_ascii_closing_punct(c);
+            } else if (bytes == 2) {
+                is_closing_punct = is_gbk_closing_punct_at(text, text_size, offset);
+            }
+
+            // Keep closing punctuation with the previous character to avoid leading punctuation on new lines.
+            if (len > 0 && is_closing_punct) {
+                if (line && line_cap > 0) {
+                    if (len + (size_t)bytes >= line_cap) break;
+                    for (int i = 0; i < bytes; i++) line[len + (size_t)i] = text[offset + (size_t)i];
+                }
+                if (has_cn && bytes > 1) *has_cn = 1;
+                offset += (size_t)bytes;
+                len += (size_t)bytes;
+                x += width;
+                break;
+            }
+
+            // Word doesn't fit: move entire word to next line (no hyphenation)
+            if (is_ascii_word_char && word_start_len > 0) {
+                offset = word_start_offset;
+                len = word_start_len;
+            }
+            break;
+        }
+        if (line && line_cap > 0) {
+            if (len + (size_t)bytes >= line_cap) break;
+            for (int i = 0; i < bytes; i++) line[len + (size_t)i] = text[offset + (size_t)i];
+        }
+        if (has_cn && bytes > 1) *has_cn = 1;
+        offset += (size_t)bytes;
+        len += (size_t)bytes;
+        x += width;
+    }
+    if (line && line_cap > 0) {
+        if (len < line_cap) line[len] = '\0';
+        else line[line_cap - 1] = '\0';
+    }
+    return offset;
+}
+
+// Detect if the text at `offset` starts a Chinese chapter header.
+// Returns the number of bytes to skip (the chapter title line), or 0 if not a chapter.
+static size_t detect_chapter_header(size_t offset) {
+    if (!g_processed_text || offset >= g_processed_text_size) return 0;
+
+    const char* p = g_processed_text + offset;
+    size_t remaining = g_processed_text_size - offset;
+
+    // Need at least "第X章" = 4+ bytes
+    if (remaining < 4) return 0;
+
+    // Check GB2312 "第" (0xB5 0xDA) or UTF-8 "第" (0xE7 0xAC 0xAC)
+    int is_di = 0;
+    if ((unsigned char)p[0] == 0xB5 && (unsigned char)p[1] == 0xDA) {
+        is_di = 1;
+    } else if ((unsigned char)p[0] == 0xE7 && (unsigned char)p[1] == 0xAC && (unsigned char)p[2] == 0xAC) {
+        is_di = 1;
+    }
+
+    if (!is_di) return 0;
+
+    // Find the chapter keyword after "第": 章/节/回/卷/部
+    size_t pos = (char_processor.char_len(g_processed_text, g_processed_text_size, offset) == 1) ? 1 : 
+                 ((unsigned char)p[0] > 0x80 ? 2 : 1);
+
+    // Skip the characters between "第" and the chapter keyword
+    while (pos < remaining) {
+        int clen = char_processor.char_len(g_processed_text, g_processed_text_size, offset + pos);
+        if (clen == 2) {
+            unsigned char b0 = (unsigned char)p[pos];
+            unsigned char b1 = (unsigned char)p[pos + 1];
+            // GB2312: 章=D5C2, 节=BDDA, 回=BBD8, 卷=BEED, 部=B2BF
+            if ((b0 == 0xD5 && b1 == 0xC2) || // 章
+                (b0 == 0xBD && b1 == 0xDA) || // 节
+                (b0 == 0xBB && b1 == 0xD8) || // 回
+                (b0 == 0xBE && b1 == 0xED) || // 卷
+                (b0 == 0xB2 && b1 == 0xBF)) { // 部
+                // Chapter found. Return bytes up to the next newline or end.
+                size_t end = offset + pos + clen;
+                while (end < g_processed_text_size && g_processed_text[end] != '\n') {
+                    end++;
+                }
+                if (end < g_processed_text_size && g_processed_text[end] == '\n') end++;
+                return end - offset;
+            }
+        }
+        if (clen <= 0) clen = 1;
+        pos += (size_t)clen;
+    }
+
+    return 0;
+}
+
+// Convert UTF-8 text to GBK so the font table (indexed by GB2312/GBK bytes) can render Chinese glyphs.
+static char* convert_utf8_to_gb2312(const char* utf8_text, size_t utf8_size, size_t* out_size) {
+    // Use GBK//IGNORE: GBK superset of GB2312, far fewer dropped chars (— " " … etc all in GBK)
+    iconv_t cd = iconv_open("GBK//IGNORE", "UTF-8");
+    if (cd == (iconv_t)-1) {
+        printf("iconv_open GBK//IGNORE failed, falling back to GB2312...\n");
+        cd = iconv_open("GB2312//IGNORE", "UTF-8");
+    }
+    if (cd == (iconv_t)-1) {
+        printf("iconv_open for GB2312/GBK failed\n");
+        return NULL;
+    }
+
+    // GB2312 output is at most same byte count as UTF-8 input (Chinese: 3→2 bytes)
+    size_t out_buf_size = utf8_size + 1;
+    char* out_buf = malloc(out_buf_size);
+    if (!out_buf) {
+        iconv_close(cd);
+        return NULL;
+    }
+
+    char* in_ptr = (char*)utf8_text;
+    size_t in_left = utf8_size;
+    char* out_ptr = out_buf;
+    size_t out_left = out_buf_size;
+
+    size_t ret = iconv(cd, &in_ptr, &in_left, &out_ptr, &out_left);
+    iconv_close(cd);
+
+    if (ret == (size_t)-1) {
+        printf("iconv conversion finished with some unmappable characters skipped\n");
+    }
+
+    *out_size = out_buf_size - out_left;
+    out_buf[*out_size] = '\0';
+    printf("UTF-8→GB2312: %zu→%zu bytes converted\n", utf8_size, *out_size);
+
+    // Shrink to actual size
+    char* result = realloc(out_buf, *out_size + 1);
+    return result ? result : out_buf;
+}
+
 // Process text content: merge paragraphs, remove extra line breaks
 char* process_text_content(const char* raw_text, size_t raw_size) {
     if (!raw_text || raw_size == 0) return NULL;
@@ -304,7 +638,7 @@ void calculate_page_info() {
     
     int count = 0;
     size_t offset = 0;
-    
+
     // Loop to calculate starting offset of each page
     while (offset < g_processed_text_size) {
         if(count >= (g_processed_text_size / 1000 + 100)) {
@@ -319,62 +653,92 @@ void calculate_page_info() {
         }
         
         temp_offsets[count++] = offset;
-        
-        // Use same display logic to calculate how many characters fit on one page
-        const int left_margin = 0;
-        const int max_x = EPD_7IN5_V2_WIDTH ;
-        
-        const int lh_en = Font16.Height;
-        const int lh_cn = Font12CN.Height;
-        
-        int y = CONTENT_Y_START + 10;
-        const int text_bottom = FOOTER_Y_START - 5;
 
-        // Calculate content for one page
-        int page_has_content = 0; // Flag to mark if this page has content
-        
-        while (offset < g_processed_text_size && y < text_bottom) {
-            int x = left_margin;
-            int has_cn = 0;
+                int y = CONTENT_Y_START;
+                const int text_bottom = FOOTER_Y_START - 5;
+                const int paragraph_gap = PARAGRAPH_SPACING_PX;
+                int paragraph_gap_pending = 0;
+                int page_has_content = 0;
 
-            // Build a line of text until reaching maximum width or encountering paragraph end marker
-            while (offset < g_processed_text_size) {
-                unsigned char c = (unsigned char)g_processed_text[offset];
-                // Encounter paragraph end marker, move to next line
-                if (c == '\n') {
-                    offset++;  // Skip paragraph end marker
-                    // First line after paragraph needs indent, so set x to indent distance
-                    x = left_margin + (Font16.Width * 30);  // Indent 30 character widths
-                    continue;  // Continue to next iteration
+                while (offset < g_processed_text_size && y < text_bottom) {
+                    // Chapter break: if we've already rendered content and a new chapter starts, finish this page.
+                    if (page_has_content) {
+                        size_t ch_skip = detect_chapter_header(offset);
+                        if (ch_skip > 0) {
+                            break;
+                        }
+                    }
+
+                    // Determine paragraph indent based on first character
+                    int is_cn_paragraph = 0;
+                    if (offset < g_processed_text_size) {
+                        unsigned char fc = (unsigned char)g_processed_text[offset];
+                        is_cn_paragraph = (fc >= 0x80);
+                    }
+                    int indent_px = is_cn_paragraph ? body_first_line_indent_cn() : body_first_line_indent_en();
+
+                    if (paragraph_gap_pending > 0) {
+                        y += paragraph_gap_pending;
+                        paragraph_gap_pending = 0;
+                        if (y >= text_bottom) {
+                            break;
+                        }
+                    }
+
+                    int paragraph_start = (offset == 0 || g_processed_text[offset - 1] == '\n');
+                    int x = CONTENT_X_MARGIN + (paragraph_start ? indent_px : 0);
+                    char line[1024] = {0};
+                    int has_cn = 0;
+                    int saw_paragraph_break = 0;
+                    size_t line_start = offset;
+
+                    size_t next_offset = collect_layout_line(
+                        g_processed_text,
+                        g_processed_text_size,
+                        offset,
+                        x,
+                        EPD_7IN5_V2_WIDTH - CONTENT_X_MARGIN * 2,
+                        line,
+                        sizeof(line),
+                        &has_cn,
+                        &saw_paragraph_break
+                    );
+
+                    if (next_offset == line_start && !saw_paragraph_break) {
+                        int char_bytes = char_processor.char_len(g_processed_text, g_processed_text_size, offset);
+                        if (char_bytes <= 0) char_bytes = 1;
+                        offset += (size_t)char_bytes;
+                        paragraph_start = 0;
+                        continue;
+                    }
+
+                    if (next_offset == line_start && saw_paragraph_break) {
+                        offset = next_offset;
+                        paragraph_start = 1;
+                        paragraph_gap_pending = paragraph_gap;
+                        continue;
+                    }
+
+                    page_has_content = 1;
+
+                    int lh = has_cn ? body_cn_line_step() : body_en_line_step();
+                    if (y + lh > text_bottom)
+                        break;
+
+                    y += lh;
+                    offset = next_offset;
+                    paragraph_start = 0;
+
+                    if (saw_paragraph_break) {
+                        paragraph_start = 1;
+                        paragraph_gap_pending = paragraph_gap;
+                    }
                 }
 
-                // Modify: Use dynamic character length detection
-                int bytes = char_processor.char_len(g_processed_text, g_processed_text_size, offset);
-
-                int width = (bytes > 1) ? Font12CN.Width : Font16.Width;
-
-                if (x + width > max_x)
-                    break;  // Reached line width limit, move to next line
-
-                if (bytes > 1) has_cn = 1;
-                offset += bytes;
-                x += width;
-            }
-
-            page_has_content = 1; // At least one line of content
-                
-            int lh = has_cn ? lh_cn : lh_en;
-            if (y + lh > text_bottom)
-                break;
-
-            y += lh;
-        }
-        
-        // If this page has no content but there's still remaining text, the text exceeds page space
-        if(!page_has_content && offset < g_processed_text_size) {
-            printf("Warning: No content placed on page %d but text remains\n", count);
-            break;
-        }
+                if(!page_has_content && offset < g_processed_text_size) {
+                    printf("Warning: No content placed on page %d but text remains\n", count);
+                    break;
+                }
     }
     
     // Allocate exact size page offset array
@@ -476,8 +840,32 @@ int load_txt_file(const char* path) {
     }
     g_processed_text_size = strlen(g_processed_text);
 
+    // If the source was UTF-8, convert processed text to GB2312 for font table lookup.
+    if (!is_gb2312) {
+        size_t gb_size = 0;
+        char* gb_text = convert_utf8_to_gb2312(g_processed_text, g_processed_text_size, &gb_size);
+        if (gb_text && gb_size > 0) {
+            free(g_processed_text);
+            g_processed_text = gb_text;
+            g_processed_text_size = gb_size;
+            char_processor.char_len = (int (*)(const char*, size_t, size_t))gb2312_char_len;
+            char_processor.is_gb2312 = 1;
+            printf("Converted UTF-8 to GB2312: %zu bytes\n", g_processed_text_size);
+        } else {
+            printf("Warning: UTF-8→GB2312 conversion failed, Chinese may not display\n");
+            if (gb_text) free(gb_text);
+        }
+    }
+
+    // Convert ASCII quotes to full-width Chinese quotes for better CJK typography.
+    normalize_ascii_double_quotes_to_gbk(&g_processed_text, &g_processed_text_size);
+
+    // Normalize spacing around Chinese punctuation after final GB2312/GBK text is ready.
+    normalize_cn_punct_spacing_gbk(g_processed_text, &g_processed_text_size);
+
     // Reset status
     g_current_char_offset = 0;
+    g_displayed_page_offset = 0;
     history_top = -1; // Clear history
     first_display_done = 0;
     
@@ -500,6 +888,38 @@ void show_error(const char* msg) {
     sleep(3);
 }
 
+// Draw mixed ASCII/CJK title text. Convert UTF-8 filename to GBK for CN font lookup.
+static void draw_header_title_mixed(UWORD x, UWORD y, const char* utf8_title, UWORD fg, UWORD bg) {
+    if (!utf8_title) return;
+
+    size_t gb_size = 0;
+    char* gb_title = convert_utf8_to_gb2312(utf8_title, strlen(utf8_title), &gb_size);
+    const char* text = gb_title ? gb_title : utf8_title;
+    size_t text_size = gb_title ? gb_size : strlen(utf8_title);
+
+    UWORD draw_x = x;
+    for (size_t i = 0; i < text_size;) {
+        unsigned char c = (unsigned char)text[i];
+        if (c < 0x80) {
+            char ch[2] = {(char)c, '\0'};
+            Paint_DrawString_EN(draw_x, y, ch, &BODY_EN_FONT, bg, fg);
+            draw_x += body_en_char_width();
+            i++;
+        } else if (i + 1 < text_size) {
+            char cn[3] = {text[i], text[i + 1], '\0'};
+            Paint_DrawString_CN(draw_x, y, cn, &BODY_CN_FONT, bg, fg);
+            draw_x += body_cn_char_width();
+            i += 2;
+        } else {
+            break;
+        }
+    }
+
+    if (gb_title) {
+        free(gb_title);
+    }
+}
+
 /* Core: Draw one page from specified offset and return starting offset of next page */
 size_t display_txt_page_from_offset(size_t start_offset)
 {
@@ -510,6 +930,9 @@ size_t display_txt_page_from_offset(size_t start_offset)
         EPD_7IN5_V2_Display(g_frame_buffer);
         return g_processed_text_size;
     }
+
+    // Record the page that is actually rendered, so wake-up can restore it reliably.
+    g_displayed_page_offset = start_offset;
 
     Paint_SelectImage(g_frame_buffer);
 
@@ -533,12 +956,12 @@ size_t display_txt_page_from_offset(size_t start_offset)
         }
 
         snprintf(title, sizeof(title), "Book: %s", display_name);
-        Paint_DrawString_EN(10, 10, title, &Font16, WHITE,BLACK);
+        draw_header_title_mixed(CONTENT_X_MARGIN, 5, title, BLACK, WHITE);
 
         Paint_DrawLine(
-            10,
+            CONTENT_X_MARGIN,
             HEADER_HEIGHT,
-            EPD_7IN5_V2_WIDTH - 10,
+            EPD_7IN5_V2_WIDTH - CONTENT_X_MARGIN,
             HEADER_HEIGHT,
             BLACK,
             DOT_PIXEL_1X1,
@@ -582,11 +1005,11 @@ size_t display_txt_page_from_offset(size_t start_offset)
         }
 
         snprintf(title, sizeof(title), "Book: %s", display_name);
-        Paint_DrawString_EN(10, 10, title, &Font16, BLACK, WHITE);
+        draw_header_title_mixed(CONTENT_X_MARGIN, 5, title, WHITE, BLACK);
         Paint_DrawLine(
-            10,
+            CONTENT_X_MARGIN,
             HEADER_HEIGHT,
-            EPD_7IN5_V2_WIDTH - 10,
+            EPD_7IN5_V2_WIDTH - CONTENT_X_MARGIN,
             HEADER_HEIGHT,
             WHITE,
             DOT_PIXEL_1X1,
@@ -596,9 +1019,39 @@ size_t display_txt_page_from_offset(size_t start_offset)
     }
     else {
         /* =================================================
-         * 3. Page turning: Only clear CONTENT + FOOTER (not Header)
-         *    But skip during screen-off recovery
+         * 3. Page turning: Clear and redraw HEADER + CONTENT + FOOTER
+         *    Ensures header is always visible and consistent
          * ================================================= */
+        // Clear header area
+        Paint_ClearWindows(
+            0,
+            0,
+            EPD_7IN5_V2_WIDTH,
+            CONTENT_Y_START,
+            BLACK
+        );
+        // Redraw header
+        {
+            char title[512];
+            const char* name = strrchr(current_file, '/');
+            name = name ? name + 1 : current_file;
+            char display_name[500];
+            safe_truncate_filename(display_name, name, sizeof(display_name));
+            char *ext = strrchr(display_name, '.');
+            if (ext && ext != display_name) *ext = 0;
+            snprintf(title, sizeof(title), "Book: %s", display_name);
+            draw_header_title_mixed(CONTENT_X_MARGIN, 5, title, WHITE, BLACK);
+            Paint_DrawLine(
+                CONTENT_X_MARGIN,
+                HEADER_HEIGHT,
+                EPD_7IN5_V2_WIDTH - CONTENT_X_MARGIN,
+                HEADER_HEIGHT,
+                WHITE,
+                DOT_PIXEL_1X1,
+                LINE_STYLE_SOLID
+            );
+        }
+        // Clear content + footer area
         Paint_ClearWindows(
             0,
             CONTENT_Y_START,
@@ -611,86 +1064,132 @@ size_t display_txt_page_from_offset(size_t start_offset)
     /* =====================================================
      * 4. Text layout drawing
      * ===================================================== */
-    const int left_margin = 0;
-    const int max_x = EPD_7IN5_V2_WIDTH;
-
-    const int lh_en = Font16.Height;
-    const int lh_cn = Font12CN.Height;
-
-    // Modify: Correct content area start Y coordinate to ensure sufficient spacing from footer
-    int y = CONTENT_Y_START;  // Removed +10 extra margin to bring text closer to top
-    const int text_bottom = FOOTER_Y_START-5; // Adjust to -5 to ensure sufficient spacing from footer
+    const int left_margin = CONTENT_X_MARGIN;
+    const int right_margin = CONTENT_X_MARGIN;
+    int y = CONTENT_Y_START;
+    const int text_bottom = FOOTER_Y_START - 5;
+    const int paragraph_gap = PARAGRAPH_SPACING_PX;
+    int paragraph_gap_pending = 0;
 
     // Use processed text
     size_t i = start_offset;
 
-    // Record starting position before entering loop
-    size_t initial_i = i;
+    size_t result_offset = i;
 
     while (i < g_processed_text_size && y < text_bottom) {
-        int x = left_margin;
-        char line[512] = {0};
-        int len = 0;
-        int has_cn = 0;
-
-        // Build a line of text until reaching maximum width or encountering paragraph end marker
-        while (i < g_processed_text_size) {
-            unsigned char c = (unsigned char)g_processed_text[i];
-            // Encounter paragraph end marker, move to next line
-            if (c == '\n') {
-                i++;  // Skip paragraph end marker
-                // First line after paragraph needs indent, so set x to indent distance
-                x = left_margin + (Font16.Width * 2);  // Indent two character widths
-                continue;  // Continue to next iteration
+        // Chapter break: if we've already rendered content and a new chapter starts, finish this page.
+        if (i != start_offset) {
+            size_t ch_skip = detect_chapter_header(i);
+            if (ch_skip > 0) {
+                break;
             }
+        }
 
-            // Modify: Use boundary-checked character length detection
-            int bytes = char_processor.char_len(g_processed_text, g_processed_text_size, i);
+        // Determine paragraph indent based on first character
+        int is_cn_paragraph = 0;
+        if (i < g_processed_text_size) {
+            unsigned char fc = (unsigned char)g_processed_text[i];
+            is_cn_paragraph = (fc >= 0x80);
+        }
+        int indent_px = is_cn_paragraph ? body_first_line_indent_cn() : body_first_line_indent_en();
 
-            int width = (bytes > 1) ? Font12CN.Width : Font16.Width;
+        if (paragraph_gap_pending > 0) {
+            y += paragraph_gap_pending;
+            paragraph_gap_pending = 0;
+            if (y >= text_bottom) {
+                break;
+            }
+        }
 
-            if (x + width > max_x)
-                break;  // Reached line width limit, move to next line
+        int paragraph_start = (i == 0 || g_processed_text[i - 1] == '\n');
+        int x = left_margin + (paragraph_start ? indent_px : 0);
+        char line[1024] = {0};
+        int has_cn = 0;
+        int saw_paragraph_break = 0;
+        size_t line_start = i;
 
-            for (int k = 0; k < bytes && i + k < g_processed_text_size; k++)
-                line[len++] = g_processed_text[i + k];
+        size_t next_offset = collect_layout_line(
+            g_processed_text,
+            g_processed_text_size,
+            i,
+            x,
+            EPD_7IN5_V2_WIDTH - left_margin - right_margin,
+            line,
+            sizeof(line),
+            &has_cn,
+            &saw_paragraph_break
+        );
 
-            if (bytes > 1) has_cn = 1;
-            i += bytes;
-            x += width;
+        int len = (int)strlen(line);
+
+        if (next_offset == line_start && !saw_paragraph_break) {
+            int char_bytes = char_processor.char_len(g_processed_text, g_processed_text_size, i);
+            if (char_bytes <= 0) char_bytes = 1;
+            i += (size_t)char_bytes;
+            paragraph_start = 0;
+            continue;
+        }
+
+        if (next_offset == line_start && saw_paragraph_break) {
+            i = next_offset;
+            paragraph_start = 1;
+            paragraph_gap_pending = paragraph_gap;
+            continue;
         }
 
         if (len > 0) {
-            int lh = has_cn ? lh_cn : lh_en;
+            int lh = has_cn ? body_cn_line_step() : body_en_line_step();
             if (y + lh > text_bottom)
                 break;
 
-            line[len] = '\0';
-            if (has_cn)
-                Paint_DrawString_CN(left_margin, y, line, &Font12CN, WHITE,BLACK);
-            else
-                Paint_DrawString_EN(left_margin, y, line, &Font16, BLACK, WHITE);
+            int draw_x = left_margin + (paragraph_start ? indent_px : 0);
+            if (has_cn) {
+                // For mixed lines (CN + EN), draw each character individually
+                // with the correct font so ASCII uses Font20 (14px width)
+                // matching the layout calculation, not Font12CN's narrow 8px.
+                const char* p = line;
+                while (*p) {
+                    unsigned char c = (unsigned char)*p;
+                    if (c <= 0x7F) {
+                        // ASCII character — draw with EN font at 14px width
+                        char buf[2] = {c, '\0'};
+                        Paint_DrawString_EN(draw_x, y, buf, &BODY_EN_FONT, BLACK, WHITE);
+                        draw_x += body_en_char_width();
+                        p++;
+                    } else {
+                        // Chinese character (2 bytes) — draw with CN font at 18px width
+                        char cn_buf[3] = {p[0], p[1], '\0'};
+                        Paint_DrawString_CN(draw_x, y, cn_buf, &BODY_CN_FONT, WHITE, BLACK);
+                        draw_x += body_cn_char_width();
+                        p += 2;
+                    }
+                }
+            } else {
+                Paint_DrawString_EN(draw_x, y, line, &BODY_EN_FONT, BLACK, WHITE);
+            }
 
             y += lh;
         }
 
-        // If no progress was made in the loop (i did not increase), break to prevent infinite loop
-        if (i == initial_i && i < g_processed_text_size) {
-            // Skip one character to prevent infinite loop
-            int char_bytes = char_processor.char_len(g_processed_text, g_processed_text_size, i);
-            i += char_bytes;  // Skip the character based on detected encoding
+        i = next_offset;
+        result_offset = next_offset;
+        paragraph_start = 0;
+
+        if (saw_paragraph_break) {
+            paragraph_start = 1;
+            paragraph_gap_pending = paragraph_gap;
         }
     }
+
     if (y < FOOTER_Y_START) {
-            Paint_ClearWindows(
-                0,
-                y,
-                EPD_7IN5_V2_WIDTH,
-                FOOTER_Y_START,
-                BLACK
-            );
+        Paint_ClearWindows(
+            0,
+            y,
+            EPD_7IN5_V2_WIDTH,
+            FOOTER_Y_START,
+            BLACK
+        );
     }
-        
 
     // Use accurate page count calculation
     int cur_page = get_current_page_index(start_offset);
@@ -699,11 +1198,15 @@ size_t display_txt_page_from_offset(size_t start_offset)
     char page[64];
     snprintf(page, sizeof(page), "Page %d / %d", cur_page, total_pages_calc);
 
+    int page_str_width = (int)strlen(page) * BODY_EN_FONT.Width;
+    int page_x = EPD_7IN5_V2_WIDTH - page_str_width - CONTENT_X_MARGIN;
+    if (page_x < 0) page_x = 0;
+
     Paint_DrawString_EN(
-        EPD_7IN5_V2_WIDTH - 160,
+        page_x,
         FOOTER_Y_START+5,  // Adjust page number Y coordinate to avoid overlapping with content
         page,
-        &Font16,
+        &BODY_EN_FONT,
         BLACK,
         WHITE
     );
@@ -715,7 +1218,7 @@ size_t display_txt_page_from_offset(size_t start_offset)
             EPD_7IN5_V2_WIDTH,
             EPD_7IN5_V2_HEIGHT // Refresh entire screen height
         );
-    return i;  // Return actual ending offset
+    return result_offset;  // Return actual ending offset
 }
 
 // Enter screen-off mode
@@ -729,7 +1232,7 @@ void enter_screen_off_mode() {
     Paint_Clear(WHITE);
     
         // Display screen-off image using GUI_ReadBmp function
-    GUI_ReadBmp_Scale_Centered("/home/pi/e-ink-reader/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/pic/2.bmp", 0, 0,EPD_7IN5_V2_WIDTH,EPD_7IN5_V2_HEIGHT,0.7) ;
+    GUI_ReadBmp_Scale_Centered("./components/e-Paper/Quectel-Pi-H1/c/pic/2.bmp", 0, 0,EPD_7IN5_V2_WIDTH,EPD_7IN5_V2_HEIGHT,0.7) ;
     
     // Display screen-off image
     EPD_7IN5_V2_Display(g_frame_buffer);
@@ -750,10 +1253,14 @@ void exit_screen_off_mode() {
     book_changed = 0;
     header_drawn = 0;  // Mark only that header needs to be redrawn, handled by display_txt_page_from_offset
 
-    // Use fast recovery: directly refresh current page
-      if (g_frame_buffer && g_processed_text) {
-        // Directly call display_txt_page_from_offset, which will redraw Header based on header_drawn=0
-        display_txt_page_from_offset(g_current_char_offset);
+        // Use fast recovery: redraw the page that was visible before screen-off.
+            if (g_frame_buffer && g_processed_text) {
+                size_t restore_offset = g_displayed_page_offset;
+                if (restore_offset >= g_processed_text_size) {
+                        restore_offset = (g_current_char_offset < g_processed_text_size) ? g_current_char_offset : 0;
+                }
+                // Directly call display_txt_page_from_offset, which will redraw Header based on header_drawn=0
+                display_txt_page_from_offset(restore_offset);
     }
     // Clear accumulated events from eye control device
     struct input_event ev;
