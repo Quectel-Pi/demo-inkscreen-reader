@@ -26,7 +26,7 @@ SMOOTHING_FACTOR = 0.3  # Exponential smoothing coefficient (0-1, smaller means 
 INITIALIZATION_PERIOD = 4.0  # Wait 4 seconds after startup before responding to page turns
 
 # Screen off related parameters
-SCREEN_OFF_TIMEOUT = 3.0  # How long to send screen off signal after no face detected (seconds)
+SCREEN_OFF_TIMEOUT = 60.0  # How long to send screen off signal after no face detected (seconds)
 screen_off_sent_time = 0  # Time when screen off signal was sent
 screen_is_off = False  # Whether the screen is off
 
@@ -215,7 +215,7 @@ while True:
             # Check if within cooldown period after face detection, if yes, do not process eye movement control
             if now - face_just_detected_time <= FACE_DETECTION_COOLDOWN:
                 # During cooldown after face detection, do not execute any page turn operations
-                pass
+                continue
             else:
                 # Check if need to send page down command after wake-up
                 if wake_up_time != 0 and time.time() - wake_up_time >= 2.0:

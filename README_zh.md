@@ -18,7 +18,7 @@
 | **眼动控制翻页** | 通过检测眼球移动方向实现翻页，当观看到阅读器底部时，只需将目光移至屏幕顶部，即可触发翻页操作 |
 | **智能息屏** | 检测不到人脸超过设定时间后自动息屏，保护隐私并节省电量 |
 | **多语言支持** | 支持纯英文、纯中文（GB2312）、中英混合文本的正确渲染 |
-| **自动排版** | 不裁剪字符，自动换行，支持跨页内容延续，中文首行缩进 |
+| **自动排版** | 不裁剪字符，自动换行，支持跨页内容延续，首行缩进 |
 | **页面记忆** | 支持返回前一页并保证像素级一致，精准记录阅读位置 |
 | **多书管理** | 支持物理按键长按切换不同书籍 |
 | **高效刷新** | 采用局部刷新技术，减少闪烁并提高刷新速度 |
@@ -26,26 +26,28 @@
 ## 👁️ 眼动控制使用方法
 
 ### 启动流程
-1. 运行bulid.sh后，系统会同时启动眼部追踪脚本和电子墨水屏显示程序
-2. 摄像头会自动检测可用设备并开始监测眼部运动
-3. 初始化需要4秒钟时间 - 此期间请保持正常的阅读姿势
+1. 运行 `./build.sh`，脚本会同时启动眼动追踪和墨水屏显示程序
+2. 摄像头自动检测可用设备并开始监测眼部运动
+3. 初始化需要 4 秒 —— 此期间请保持正常阅读姿势
 
 ### 翻页操作
-- **向下翻页**：保持阅读姿势，按正常速度，从屏幕顶部开始往下阅读，当视线到屏幕底部时，只需将目光移至屏幕顶部，即可触发翻页操作
-- **向上翻页**：向前翻页需通过物理按键操作
-- **翻页冷却**：两次翻页间有1秒冷却时间，防止误触
+- **向下翻页**：保持阅读姿势，按正常速度从屏幕顶部往下阅读，当视线到达屏幕底部时将目光移回顶部，即可触发翻页
+- **向上翻页**：需通过物理按键操作（短按 KEY2）
+- **翻页冷却**：两次翻页间有 1 秒冷却时间，防止误触
 
-### 息屏/唤醒功能
-- **自动息屏**：检测不到人脸4秒后自动发送息屏信号
+### 息屏 / 唤醒功能
+- **自动息屏**：检测不到人脸 60 秒后自动发送息屏信号
 - **自动唤醒**：重新检测到人脸时自动唤醒屏幕
-- **事件清理**：唤醒时会清理息屏期间的输入事件，防止误翻页
+- **事件清理**：唤醒时清理息屏期间的输入事件，防止误翻页
 
 ## ⌨️ 物理按键功能
 
-- **短按按键KEY1**：向下翻页
-- **短按按键KEY2**：向上翻页
-- **长按按键KEY1**：切换到下一本书
-- **长按按键KEY2**：切换到上一本书
+| 操作 | 按键 | 功能 |
+|------|------|------|
+| 短按 | KEY1 | 向下翻页 |
+| 短按 | KEY2 | 向上翻页 |
+| 长按 | KEY1 | 切换到下一本书 |
+| 长按 | KEY2 | 切换到上一本书 |
 
 ## 🛠️ 系统要求
 
@@ -78,156 +80,93 @@
 
 ## 🚀 完整部署指南
 
-### 获取项目源码
-1. 在单板电脑终端下新建e-ink-reader文件夹存放项目源码
+> 一键部署脚本 `deploy.sh` 支持全新系统从零完成所有环境配置，无需手动逐步操作。
+
+### 前置准备
+
+确保硬件连接完毕，系统已联网。
+
+### 克隆项目代码
+
 ```bash
-mkdir -p /home/pi/e-ink-reader
-cd /home/pi/e-ink-reader
+sudo apt update
+#安装git
+sudo apt install -y git
+#克隆项目代码
+git clone https://github.com/Quectel-Pi/demo-inkscreen-reader.git
 ```
 
-2. 克隆项目源码至该目录下
+### 运行部署脚本
 
-3. 在该文件夹路径下打开终端运行以下命令修改文件权限
 ```bash
-sudo chmod -R 755 /home/pi/e-ink-reader
+cd ~/demo-inkscreen-reader
+sudo chmod 755 deploy.sh
+./deploy.sh
 ```
 
-### 安装LG库
+### 部署完成后
 
-```shell
-sudo apt update && sudo apt install python3-setuptools wget
-wget https://github.com/joan2937/lg/archive/master.zip
-unzip master.zip
-cd lg-master
-make
-sudo make install
-```
-
-### 配置Python环境
-系统默认的python版本为3.13，而MediaPipe模型需要Python 3.9-3.12，需要重新指定python路径（系统中已安装python3.10）：
-
-```shell
-#备份当前Python路径链接
-sudo cp /usr/bin/python3 /usr/bin/python3.backup
-#删除当前Python路径链接
-sudo rm /usr/bin/python3
-# 创建新的路径链接指向Python 3.10
-sudo ln -s /usr/bin/python3.10 /usr/bin/python3
-#验证修改
-ls -l /usr/bin/python3
-python3 --version
-```
-
-### 激活Python虚拟环境
-执行下面命令创建并激活Python虚拟环境：
 ```bash
-python3.10 -m venv ~/mediapipe_env
-source ~/mediapipe_env/bin/activate
+sudo reboot          # 重启使配置生效
+cd ~/demo-inkscreen-reader
+sudo chmod 755 build.sh
+./build.sh           # 编译并启动阅读器
 ```
 
-### 安装Python依赖项
-在demo-inkscreen-reader目录下安装Python依赖项：
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+### 准备书籍文件
 
-单独安装evdev库：
-```bash
-sudo ln -s /usr/bin/aarch64-linux-gnu-gcc /usr/bin/aarch64-qcom-linux-gcc
-CPPFLAGS="-I/usr/include/python3.13 -I/usr/include/python3.10" CFLAGS="-I/usr/include/python3.13 -I/usr/include/python3.10" pip3 install --no-binary evdev evdev==1.9.2
-```
+将 `.txt` 文件放入 `books/` 目录即可。系统自动识别 UTF-8 与 GB2312 编码。
 
-### 编译墨水屏驱动程序
-在e-ink-reader/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c目录下编译墨水屏阅读器程序，若该目录出现epd文件则证明编译成功：
+> **提示**：Windows 用户使用记事本 → 另存为 → 编码选 UTF-8 或 ANSI（GB2312）均可。
+
+## 🔧 编译说明
+
+### C 驱动编译
+
+EPD 墨水屏驱动使用 C 语言编写，采用 Makefile 构建：
+
 ```bash
-cd /home/pi/e-ink-reader/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c
+cd components/e-Paper/Quectel-Pi-H1/c
+make clean
 make CC=gcc EPD=epd7in5V2
 ```
 
-### 创建udev规则文件
-先输入下面命令创建并打开udev规则文件：
-```bash
-sudo nano /etc/udev/rules.d/99-uinput.rules
-```
+编译产物为 `epd` 可执行文件，需以 `sudo` 权限运行（需要访问 GPIO）。
 
-在文件中添加下面语句，按下"ctrl + o" + Enter保存编辑内容，然后按下"ctrl + x"退出编辑：
-```
-KERNEL=="uinput", MODE="0660", GROUP="input"
-```
+### 字体生成（可选）
 
-### 添加input组
-将用户添加到input组：
-```bash
-sudo usermod -aG input pi 
-```
+如需自定义字体，可使用 `tools/generate_noto_font12cn.py` 从中文字体文件提取指定大小的点阵字库。
 
-### 开启SPI功能
-在终端输入下面命令开启SPI功能：
-```bash
-sudo qpi-config 40pin set
-```
-
-###  验证配置
-1. 重启系统后在终端输入下面命令验证用户是否在input组以及udev规则配置：
-```bash
-ls -l /dev/uinput
-groups
-```
-
-2. 验证SPI功能是否开启：
-```bash
-ls /dev/spi*
-```
-
-###  配置免密运行程序
-在终端输入下面命令配置免密运行`epd`程序：
-```bash
-echo "pi ALL=(ALL) NOPASSWD: /home/pi/e-ink-reader/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/epd" | sudo tee /etc/sudoers.d/eink
-```
-
-###  准备书籍文件
-
-将您的 .txt 文件放入**e-ink-reader/demo-inkscreen-reader/books**目录下，并确保编码为 **GB2312**。
-
-> Windows 用户操作路径：记事本 → 另存为 → 编码选"ANSI"（即 GB2312）。
-
-### 运行项目
-
-在e-ink-reader/demo-inkscreen-reader文件夹中执行bulid.sh脚本来运行项目：
-```bash
-cd /home/pi/e-ink-reader/demo-inkscreen-reader
-./bulid.sh
-```
-
-## 目录结构
+## 📁 目录结构
 
 ```
 demo-inkscreen-reader/
-├── README.md                 #项目说明文档
-├── README_zh.md             #中文版说明文档
-├── bulid.sh                 #项目构建脚本
-├── requirements.txt         #Python依赖包列表
-├── assets/                  #存放项目图片资源
-│   └── main_reader.png      #主界面预览图
-├── books/                   #存放书籍文件的目录
-├── components/              #组件目录
-│   ├── e-Paper/             
-│   │   └── Quectel-Pi-H1/    
-               └── c/              #C源码相关文件
-                    └── examples/      #C示例程序
-                        └── EPD_7in5_V2_reader_txt.c   # 主程序入口文件
-└── src/
-    └── main.py              #主程序入口文件
+├── README.md                              # 项目说明（英文）
+├── README_zh.md                           # 项目说明（中文）
+├── build.sh                               # 启动脚本
+├── deploy.sh                              # 一键部署脚本
+├── requirements.txt                       # Python 依赖列表
+├── assets/
+│   └── main_reader.jpg                    # 主界面预览图
+├── books/                                 # 书籍文件目录
+│   ├── test_cn.txt                        # 中文测试书籍
+│   └── test_en.txt                        # 英文测试书籍
+├── components/
+│   └── e-Paper/
+│       └── Quectel-Pi-H1/
+│           └── c/                         # C 驱动源码
+│               ├── epd                    # 编译产物（可执行文件）
+│               ├── Makefile
+│               ├── examples/
+│               │   └── EPD_7in5_V2_reader_txt.c  # 主显示程序
+│               ├── lib/                   # 驱动库（Config/GUI/e-Paper/Fonts）
+│               └── pic/
+│                   └── 2.bmp              # 息屏图片
+├── src/
+│   └── main.py                            # Python 眼动追踪主程序
+└── tools/
+    └── generate_noto_font12cn.py          # 字体生成工具
 ```
-
-## ⚠️ 注意事项
-
-1. **文本编码**：TXT文件必须使用GB2312编码，否则中文可能出现乱码
-2. **摄像头位置**：摄像头应放置在屏幕附近，确保能清晰拍摄到用户的面部
-3. **光线条件**：在光线充足的环境下使用，确保摄像头能够清晰捕捉眼部特征
-4. **权限设置**：程序需要访问摄像头和输入设备的权限，可能需要sudo运行
-5. **硬件连接**：确保电子墨水屏正确连接到SPI接口，GPIO配置正确
 
 ## 🔍 故障排除
 
@@ -236,7 +175,6 @@ demo-inkscreen-reader/
 | 摄像头无法打开 | 检查设备权限，使用 `ls /dev/video*` 确认设备节点存在 |
 | 眼动控制无响应 | 检查摄像头是否被其他程序占用，确认MediaPipe安装正确 |
 | 屏幕无显示或异常 | 检查SPI连接是否牢固，GPIO配置是否正确 |
-| 中文显示乱码 | 确认TXT文件编码为GB2312 |
 | 按键无效 | 使用 `cat /proc/bus/input/devices` 查找event设备并确认权限 |
 | 编译失败 | 检查交叉编译工具链是否存在且路径正确 |
 
