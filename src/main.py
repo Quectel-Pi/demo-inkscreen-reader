@@ -13,7 +13,7 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # Iris position change threshold (relative change)
-IRIS_CHANGE_THRESHOLD = 0.004
+IRIS_CHANGE_THRESHOLD = 0.008
 # Threshold for significant iris position change
 
 # Page turn cooldown time

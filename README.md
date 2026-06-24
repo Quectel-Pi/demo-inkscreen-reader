@@ -80,56 +80,77 @@ In terms of display, the system adopts a partial refresh and partition rendering
 
 > The one-click deployment script `deploy.sh` can complete all environment configuration from scratch on a fresh system, no manual steps required.
 
-### Prerequisites
+### Project Implementation
 
-Ensure hardware is properly connected and the system has network access.
+1. Open a terminal on the smart board and clone the project code with git.
 
-### Clone the Project
-
-```bash
+```shell
 sudo apt update
-# Install git
 sudo apt install -y git
-# Clone the project
 git clone https://github.com/Quectel-Pi/demo-inkscreen-reader.git
 ```
 
-### Run the Deployment Script
+After execution, a `demo-inkscreen-reader` folder should be created in the current directory.
+
+2. Run the `deploy.sh` deployment script. If the terminal shows `Deployment complete`, deployment is successful.
 
 ```bash
-cd ~/demo-inkscreen-reader
+cd demo-inkscreen-reader
 sudo chmod 755 deploy.sh
 ./deploy.sh
 ```
 
-### After Deployment
+If an error occurs while executing `./deploy.sh`, or if the terminal does not display `Deployment complete`, do not continue with the following steps. Check whether the network connection is normal, then return to the project root directory and run `deploy.sh` again.
+
+3. After deployment is complete, reboot the device first.
 
 ```bash
-sudo reboot          # Reboot to apply configuration
-cd ~/demo-inkscreen-reader
+sudo reboot
+```
+
+4. After rebooting, open the terminal again and run the program in the `demo-inkscreen-reader` directory.
+
+```bash
+cd demo-inkscreen-reader
 sudo chmod 755 build.sh
-./build.sh           # Compile and start the reader
+./build.sh
 ```
 
 ### Prepare Book Files
 
-Put your `.txt` files into the `books/` directory. The system automatically detects UTF-8 and GB2312 encoding.
+Place `.txt` files into the `demo-inkscreen-reader/books/` directory. The system automatically recognizes UTF-8 and GB2312 encodings.
 
-> **Tip**: Windows users: Notepad → Save As → Select encoding "UTF-8" or "ANSI" (GB2312).
+> Tip: For Windows users, in Notepad choose Save As, then select UTF-8 or ANSI (GB2312) encoding.
 
-## 🔧 Compilation Notes
+### Compilation Notes
 
-### C Driver Compilation
-
-The EPD e-ink screen driver is written in C and built with Makefile:
+The EPD e-paper driver is written in C and built with Makefile:
 
 ```bash
-cd components/e-Paper/Quectel-Pi-H1/c
+cd demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c
 make clean
 make CC=gcc EPD=epd7in5V2
 ```
+The build output is the `epd` executable, which must be run with `sudo` privileges (GPIO access required).
 
-The compiled output is an `epd` executable, which must be run with `sudo` (requires GPIO access).
+### Enable Auto-start at Boot (Optional)
+
+This project provides `setup_autostart.sh` to configure a system-level service.
+
+```bash
+cd ~/demo-inkscreen-reader
+sudo chmod 755 setup_autostart.sh
+./setup_autostart.sh
+```
+
+Service management:
+
+```bash
+sudo systemctl status inkscreen-reader
+sudo systemctl restart inkscreen-reader
+sudo systemctl stop inkscreen-reader
+sudo systemctl disable inkscreen-reader
+```
 
 ### Font Generation (Optional)
 
@@ -144,6 +165,7 @@ demo-inkscreen-reader/
 ├── README_zh.md                           # Project description (Chinese)
 ├── build.sh                               # Startup script
 ├── deploy.sh                              # One-click deployment script
+├── setup_autostart.sh                     # Auto-start setup script
 ├── requirements.txt                       # Python dependency list
 ├── assets/
 │   └── main_reader.jpg                    # Main interface preview
