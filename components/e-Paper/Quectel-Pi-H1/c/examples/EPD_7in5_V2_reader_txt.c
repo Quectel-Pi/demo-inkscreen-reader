@@ -788,6 +788,7 @@ int get_current_page_index(size_t offset) {
 
 // Load entire TXT file to memory (GB2312 encoding)
 int load_txt_file(const char* path) {
+    printf("[DEBUG] load_txt_file called with path: %s\n", path);
     FILE* fp = fopen(path, "rb");
     if (!fp) {
         printf("Failed to open TXT: %s (errno=%d)\n", path, errno);
@@ -796,6 +797,7 @@ int load_txt_file(const char* path) {
 
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
+    printf("[DEBUG] File size: %ld bytes\n", size);
     if (size <= 0 || size > MAX_BOOK_SIZE) {
         fclose(fp);
         printf("File too large or empty: %ld\n", size);
@@ -812,6 +814,7 @@ int load_txt_file(const char* path) {
 
     fseek(fp, 0, SEEK_SET);
     size_t read_bytes = fread(g_full_text, 1, size, fp);
+    printf("[DEBUG] Read %zu bytes from file\n", read_bytes);
     fclose(fp);
 
     if (read_bytes != (size_t)size) {
@@ -871,9 +874,11 @@ int load_txt_file(const char* path) {
     
     // Calculate page info
     calculate_page_info();
+    printf("[DEBUG] Calculated total_pages: %d\n", total_pages);
     current_page_index = 1;  // Reset to first page
 
-    printf("Loaded %zu bytes from %s, processed to %zu bytes\n", g_text_size, path, g_processed_text_size);
+    printf("[DEBUG] Loaded %zu bytes from %s, processed to %zu bytes, total_pages=%d\n", 
+           g_text_size, path, g_processed_text_size, total_pages);
     return 0;
 }
 
@@ -925,6 +930,7 @@ size_t display_txt_page_from_offset(size_t start_offset)
 {
     // Use processed text instead of original text
     if (!g_processed_text || start_offset >= g_processed_text_size) {
+        printf("[DEBUG] End of text reached, offset=%zu, size=%zu\n", start_offset, g_processed_text_size);
         Paint_SelectImage(g_frame_buffer);
         Paint_Clear(WHITE);
         EPD_7IN5_V2_Display(g_frame_buffer);
@@ -933,14 +939,21 @@ size_t display_txt_page_from_offset(size_t start_offset)
 
     // Record the page that is actually rendered, so wake-up can restore it reliably.
     g_displayed_page_offset = start_offset;
+    printf("[DEBUG] Display page from offset: %zu, first_display_done=%d, book_changed=%d\n", 
+           start_offset, first_display_done, book_changed);
 
+    printf("[DEBUG] Calling Paint_SelectImage with buffer=%p\n", g_frame_buffer);
     Paint_SelectImage(g_frame_buffer);
+    printf("[DEBUG] Paint_SelectImage done\n");
 
     /* =====================================================
      * 1. First display or book switch: Full screen initialization
      * ===================================================== */
     if (!first_display_done || book_changed) {
+        printf("[DEBUG] First display or book changed, full init\n");
+        printf("[DEBUG] Calling Paint_Clear\n");
         Paint_Clear(WHITE);
+        printf("[DEBUG] Paint_Clear done\n");
 
         /* Header —— Permanent area */
         char title[512];
@@ -956,8 +969,12 @@ size_t display_txt_page_from_offset(size_t start_offset)
         }
 
         snprintf(title, sizeof(title), "Book: %s", display_name);
+        printf("[DEBUG] Drawing header title: %s\n", title);
         draw_header_title_mixed(CONTENT_X_MARGIN, 5, title, BLACK, WHITE);
+        printf("[DEBUG] Header drawn\n");
 
+        printf("[DEBUG] Initializing display (full refresh)\n");
+        printf("[DEBUG] Drawing separator line\n");
         Paint_DrawLine(
             CONTENT_X_MARGIN,
             HEADER_HEIGHT,
@@ -969,7 +986,11 @@ size_t display_txt_page_from_offset(size_t start_offset)
         );
         EPD_7IN5_V2_Init_Fast();
         EPD_7IN5_V2_Clear();
+        printf("[DEBUG] Calling EPD_7IN5_V2_Display with full buffer\n");
+        fflush(stdout);
         EPD_7IN5_V2_Display(g_frame_buffer);
+        printf("[DEBUG] Calling EPD_7IN5_V2_Init_Part\n");
+        fflush(stdout);
         EPD_7IN5_V2_Init_Part();
 
         first_display_done = 1;
@@ -1138,6 +1159,7 @@ size_t display_txt_page_from_offset(size_t start_offset)
         }
 
         if (len > 0) {
+            printf("[DEBUG] Drawing line at y=%d, len=%d, has_cn=%d, line='%.20s'\n", y, len, has_cn, line);
             int lh = has_cn ? body_cn_line_step() : body_en_line_step();
             if (y + lh > text_bottom)
                 break;
@@ -1211,18 +1233,24 @@ size_t display_txt_page_from_offset(size_t start_offset)
         WHITE
     );
 
-        EPD_7IN5_V2_Display_Part(
-            g_frame_buffer,
-            0,
-            0,  // Starting from top, including Header
-            EPD_7IN5_V2_WIDTH,
-            EPD_7IN5_V2_HEIGHT // Refresh entire screen height
-        );
+    printf("[DEBUG] About to call EPD_7IN5_V2_Display_Part with buffer=%p, size=%dx%d\n", 
+           g_frame_buffer, EPD_7IN5_V2_WIDTH, EPD_7IN5_V2_HEIGHT);
+    fflush(stdout);
+    EPD_7IN5_V2_Display_Part(
+        g_frame_buffer,
+        0,
+        0,  // Starting from top, including Header
+        EPD_7IN5_V2_WIDTH,
+        EPD_7IN5_V2_HEIGHT // Refresh entire screen height
+    );
+    printf("[DEBUG] EPD_7IN5_V2_Display_Part returned\n");
+    fflush(stdout);
     return result_offset;  // Return actual ending offset
 }
 
 // Enter screen-off mode
 void enter_screen_off_mode() {
+    printf("[DEBUG] enter_screen_off_mode called\n");
     if (screen_off) return; // If already in screen-off state, return directly
 
     printf("Entering screen off mode...\n");
@@ -1241,6 +1269,7 @@ void enter_screen_off_mode() {
 
 // Exit screen-off mode (optimized version)
 void exit_screen_off_mode() {
+    printf("[DEBUG] exit_screen_off_mode called\n");
     if (!screen_off) return; // If not in screen-off state, return directly
 
     printf("Exiting screen off mode...\n");
@@ -1308,6 +1337,7 @@ void safe_truncate_filename(char* dest, const char* src, size_t dest_size) {
 
 // Switch to next book
 void next_book() {
+    printf("[DEBUG] next_book called, current=%d, count=%d\n", current_book_index, book_count);
     if (book_count > 1) {
         current_book_index = (current_book_index + 1) % book_count;
         snprintf(current_file, sizeof(current_file), "%s", book_list[current_book_index]);
@@ -1329,6 +1359,7 @@ void next_book() {
 
 // Switch to previous book
 void prev_book() {
+    printf("[DEBUG] prev_book called, current=%d, count=%d\n", current_book_index, book_count);
     if (book_count > 1) {
         current_book_index = (current_book_index - 1 + book_count) % book_count;
         snprintf(current_file, sizeof(current_file), "%s", book_list[current_book_index]);
@@ -1359,11 +1390,13 @@ static KeyState key_states[3] = {0}; // Index 0 unused, 1=KEY1, 2=KEY2
 
 // New: Key event handling function
 void handle_key_event(int key_id, struct input_event *ev) {
+    printf("[DEBUG] handle_key_event: id=%d, type=%d, code=%d, value=%d\n", key_id, ev->type, ev->code, ev->value);
     if (ev->type != EV_KEY) return;
     
     // Check if currently in anti-flicker mode (within 1.5 seconds after screen-on)
     struct timeval current_time;
     gettimeofday(&current_time, NULL);
+    printf("[DEBUG] Anti-flicker check: current=%ld, until=%ld\n", current_time.tv_sec, anti_flicker_until);
     if (current_time.tv_sec < anti_flicker_until) {
         // In anti-flicker mode, only allow screen-off events to pass through
         if (!(ev->code == CUSTOM_SCREEN_OFF_BTN)) {
@@ -1459,6 +1492,7 @@ void handle_keys(void) {
 
     // Non-blocking polling
     int ret = poll(fds, num_fds, 0);
+    printf("[DEBUG] poll returned: %d\n", ret);
     if (ret <= 0) return;
 
     // Handle KEY1 events
@@ -1493,27 +1527,37 @@ void handle_keys(void) {
 
 // Main function
 void EPD_7in5_V2_reader_txt(void) {
+    printf("[DEBUG] EPD_7in5_V2_reader_txt started\n");
     printf("E-Ink Reader: Full Continuity, No Truncation, Exact Page History\n");
 
 #ifndef QUECPI
     if (DEV_Module_Init() != 0) return;
+    printf("[DEBUG] DEV_Module_Init() completed\n");
 #else
     extern int GPIO_Handle;
+    printf("[DEBUG] Opening GPIO chip...\n");
     GPIO_Handle = lgGpiochipOpen(4);
+    printf("[DEBUG] GPIO_Handle=%d\n", GPIO_Handle);
     if (GPIO_Handle < 0) {
-        printf("Failed to open gpiochip4\n");
+        printf("Failed to open gpiochip4 (errno=%d)\n", GPIO_Handle);
         return;
     }
-    lgGpioClaimOutput(GPIO_Handle, 0, 47, 0);
+    int gpio_ret = lgGpioClaimOutput(GPIO_Handle, 0, 47, 0);
+    printf("[DEBUG] lgGpioClaimOutput returned: %d\n", gpio_ret);
+    
     extern int SPI_Handle;
     SPI_Handle = lgSpiOpen(10, 0, 10000000, 0);
+    printf("[DEBUG] SPI_Handle=%d\n", SPI_Handle);
     if (SPI_Handle < 0) {
-        printf("Failed to open spidev10.0\n");
+        printf("Failed to open spidev10.0 (errno=%d)\n", SPI_Handle);
         return;
     }
+    printf("[DEBUG] Calling DEV_GPIO_Init\n");
     DEV_GPIO_Init();
+    printf("[DEBUG] DEV_GPIO_Init called\n");
 #endif
     // Open physical key device
+    printf("[DEBUG] Opening key devices...\n");
     key1_fd = open("/dev/input/event3", O_RDONLY);
     key2_fd = open("/dev/input/event1", O_RDONLY);
 
@@ -1535,12 +1579,14 @@ void EPD_7in5_V2_reader_txt(void) {
     }
 
     DIR* dir = opendir(BOOK_PATH);
+    printf("[DEBUG] Opening book directory: %s\n", BOOK_PATH);
     if (!dir) {
         show_error("Books dir not found");
         goto cleanup;
     }
     struct dirent* entry;
     book_count = 0;
+    printf("[DEBUG] Scanning for TXT files...\n");
     while ((entry = readdir(dir)) != NULL && book_count < MAX_BOOKS) {
         if (entry->d_type == DT_REG) {
             const char* ext = get_ext(entry->d_name);
@@ -1557,6 +1603,7 @@ void EPD_7in5_V2_reader_txt(void) {
         }
     }
     closedir(dir);
+    printf("[DEBUG] Found %d TXT files\n", book_count);
     if (book_count == 0) {
         show_error("No TXT file found");
         goto cleanup;
@@ -1564,6 +1611,7 @@ void EPD_7in5_V2_reader_txt(void) {
 
     current_book_index = 0;
     // Copy safely with truncation check
+    printf("[DEBUG] Loading book: %s\n", book_list[current_book_index]);
     if (strlen(book_list[current_book_index]) >= sizeof(current_file)) {
         printf("Warning: Book path too long, truncating\n");
         strncpy(current_file, book_list[current_book_index], sizeof(current_file) - 1);
@@ -1573,11 +1621,13 @@ void EPD_7in5_V2_reader_txt(void) {
     }
 
     if (load_txt_file(current_file) != 0) {
+        printf("[ERROR] Failed to load TXT file\n");
         show_error("TXT load failed");
         goto cleanup;
     }
 
     UDOUBLE Imagesize = ((EPD_7IN5_V2_WIDTH % 8 == 0) ? (EPD_7IN5_V2_WIDTH / 8) : (EPD_7IN5_V2_WIDTH / 8 + 1)) * EPD_7IN5_V2_HEIGHT;
+    printf("[DEBUG] Allocating frame buffer, size: %u bytes\n", Imagesize);
     g_frame_buffer = (UBYTE *)malloc(Imagesize);
     if (!g_frame_buffer) {
         printf("Malloc failed\n");
@@ -1590,11 +1640,16 @@ void EPD_7in5_V2_reader_txt(void) {
         free(g_frame_buffer);
         goto cleanup;
     }
+    printf("[DEBUG] Calling Paint_NewImage with buffer=%p\n", g_frame_buffer);
     Paint_NewImage(g_frame_buffer, EPD_7IN5_V2_WIDTH, EPD_7IN5_V2_HEIGHT, ROTATE_180, WHITE);
+    printf("[DEBUG] Paint image created: %ux%u, rotate=180\n", EPD_7IN5_V2_WIDTH, EPD_7IN5_V2_HEIGHT);
+    fflush(stdout);
 
     // Display first page - Ensure first display is correct
+    printf("[DEBUG] Displaying first page\n");
     g_current_char_offset = 0;  // Ensure starting from the beginning of the text
     g_current_char_offset = display_txt_page_from_offset(g_current_char_offset);  // Update current offset to the start of next page
+    printf("[DEBUG] First page displayed, next offset: %zu\n", g_current_char_offset);
     // Push first page history (to allow backing to start)
     if (history_top < MAX_HISTORY - 1) {
         history_stack[++history_top] = 0;  // Store the starting offset of the first page
