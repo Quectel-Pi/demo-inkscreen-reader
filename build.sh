@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 
 # ebook reader startup script
 # Runs both Python eye tracking control script and E-ink display program
