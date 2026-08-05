@@ -46,9 +46,7 @@ cd "$SCRIPT_DIR"
 
 # Start Python eye tracking control script (run in background)
 echo "Starting Python eye tracking control script..."
-# Activate virtual environment and run
-source ~/mediapipe_env/bin/activate && python3 ./src/main.py > /dev/null 2>&1 &
-# source ~/mediapipe_env/bin/activate && python3 ./src/main.py > logs/python_eye_tracking.log 2>&1 &
+python3 ./src/main.py > logs/python_eye_tracking.log 2>&1 &
 PYTHON_PID=$!
 
 # Check if Python process started successfully
@@ -59,8 +57,7 @@ fi
 
 # Start E-ink display program (run in background)
 echo "Starting E-ink display program..."
-# sudo ~/demo-inkscreen-reader/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/epd > logs/epd_program.log 2>&1 &
-sudo "$HOME/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/epd" > /dev/null 2>&1 &
+sudo "$HOME/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/epd" > logs/epd_program.log 2>&1 &
 EPD_PID=$!
 
 # Check if EPD process started successfully

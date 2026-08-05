@@ -82,56 +82,76 @@
 
 > 一键部署脚本 `deploy.sh` 支持全新系统从零完成所有环境配置，无需手动逐步操作。
 
-### 前置准备
+### 项目实现
 
-确保硬件连接完毕，系统已联网。
+1. 在智能主控板上打开终端，使用git克隆项目代码。
 
-### 克隆项目代码
-
-```bash
+```shell
 sudo apt update
-#安装git
 sudo apt install -y git
-#克隆项目代码
 git clone https://github.com/Quectel-Pi/demo-inkscreen-reader.git
 ```
+执行完成后，当前目录下应生成`demo-inkscreen-reader`文件夹。
 
-### 运行部署脚本
+2. 运行`deploy.sh`部署脚本，终端显示`Deployment complete`则说明部署完成。
 
 ```bash
-cd ~/demo-inkscreen-reader
+cd demo-inkscreen-reader
 sudo chmod 755 deploy.sh
 ./deploy.sh
 ```
+如果执行`./deploy.sh`过程中报错，或终端未显示"Deployment complete"，请先不要继续执行后续步骤。建议先确认网络连接正常，再返回项目根目录重新执行一次`deploy.sh`。
 
-### 部署完成后
+3. 部署完成后，先输入以下命令重启设备。
 
 ```bash
-sudo reboot          # 重启使配置生效
-cd ~/demo-inkscreen-reader
-sudo chmod 755 build.sh
-./build.sh           # 编译并启动阅读器
+sudo reboot    
 ```
 
-### 准备书籍文件
+4. 设备重启后，重新打开终端，在`demo-inkscreen-reader`路径下执行程序。
 
-将 `.txt` 文件放入 `books/` 目录即可。系统自动识别 UTF-8 与 GB2312 编码。
+```bash
+cd demo-inkscreen-reader
+sudo chmod 755 build.sh
+./build.sh
+```
+
+### 显示书籍说明
+
+将 `.txt` 文件放入项目的`demo-inkscreen-reader/books/` 目录即可。系统自动识别UTF-8与GB2312编码。
 
 > **提示**：Windows 用户使用记事本 → 另存为 → 编码选 UTF-8 或 ANSI（GB2312）均可。
 
-## 🔧 编译说明
-
-### C 驱动编译
+### 编译说明
 
 EPD 墨水屏驱动使用 C 语言编写，采用 Makefile 构建：
 
 ```bash
-cd components/e-Paper/Quectel-Pi-H1/c
+cd demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c
 make clean
 make CC=gcc EPD=epd7in5V2
 ```
-
 编译产物为 `epd` 可执行文件，需以 `sudo` 权限运行（需要访问 GPIO）。
+
+
+### 配置开机自启动（可选）
+
+项目提供 `setup_autostart.sh`，用于配置系统级 service。
+
+```bash
+cd ~/demo-inkscreen-reader
+sudo chmod 755 setup_autostart.sh
+./setup_autostart.sh
+```
+
+服务管理命令：
+
+```bash
+sudo systemctl status inkscreen-reader
+sudo systemctl restart inkscreen-reader
+sudo systemctl stop inkscreen-reader
+sudo systemctl disable inkscreen-reader
+```
 
 ### 字体生成（可选）
 
@@ -145,6 +165,7 @@ demo-inkscreen-reader/
 ├── README_zh.md                           # 项目说明（中文）
 ├── build.sh                               # 启动脚本
 ├── deploy.sh                              # 一键部署脚本
+├── setup_autostart.sh                     # 开机自启动脚本
 ├── requirements.txt                       # Python 依赖列表
 ├── assets/
 │   └── main_reader.jpg                    # 主界面预览图
