@@ -42,7 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Create log directory
-# mkdir -p logs
+mkdir -p logs
 
 # Start Python eye tracking control script (run in background)
 echo "Starting Python eye tracking control script..."
@@ -57,7 +57,7 @@ fi
 
 # Start E-ink display program (run in background)
 echo "Starting E-ink display program..."
-sudo "$HOME/demo-inkscreen-reader/components/e-Paper/Quectel-Pi-H1/c/epd" > logs/epd_program.log 2>&1 &
+sudo "$SCRIPT_DIR/components/e-Paper/Quectel-Pi-H1/c/epd" > logs/epd_program.log 2>&1 &
 EPD_PID=$!
 
 # Check if EPD process started successfully
