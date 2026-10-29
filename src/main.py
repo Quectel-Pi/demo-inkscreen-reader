@@ -51,6 +51,33 @@ initialization_start_time = time.time()
 is_initialized = False  # Whether initialization is completed
 
 # ======================
+# OPTIONAL: eye-control preview UI (HTTP/MJPEG), enable with INK_PREVIEW=1
+# ======================
+# PREVIEW_UI_PATCHED
+preview = None
+if os.environ.get("INK_PREVIEW", "1") != "0":
+    try:
+        import preview_server
+        preview = preview_server.start(int(os.environ.get("INK_PREVIEW_PORT", "8088")))
+        print(f"[INFO] Eye control preview UI listening on port {preview.port}", flush=True)
+        _gui = os.environ.get("INK_PREVIEW_GUI", "window").lower()
+        _size = os.environ.get("INK_PREVIEW_GUI_SIZE", "720x480").lower()
+        try:
+            _sw, _sh = [int(v) for v in _size.replace("*", "x").split("x")[:2]]
+        except Exception:
+            _sw, _sh = 720, 480
+        if _gui not in ("0", "off", "none", "false") and os.environ.get("DISPLAY"):
+            preview.enable_gui(mode=_gui, size=(_sw, _sh),
+                               fit=os.environ.get("INK_PREVIEW_GUI_FIT", "cover"),
+                               pos=os.environ.get("INK_PREVIEW_GUI_POS", ""))
+        else:
+            print("[INFO] Native window skipped (no DISPLAY or INK_PREVIEW_GUI=0)", flush=True)
+    except Exception as _pv_err:
+        print(f"[WARN] Preview UI disabled: {_pv_err}", flush=True)
+        preview = None
+
+
+# ======================
 # Camera auto-detection function
 # ======================
 def find_available_camera():
@@ -96,6 +123,8 @@ def send_key(key):
     ui.write(ecodes.EV_KEY, key, 1)
     ui.write(ecodes.EV_KEY, key, 0)
     ui.syn()
+    if preview:
+        preview.flash(("PAGE DOWN" if key == ecodes.KEY_PAGEDOWN else str(key)))
 
 # ======================
 # MediaPipe initialization
@@ -120,7 +149,17 @@ RIGHT_EYE = [362, 263, 387, 386, 385, 373, 374, 380]
 # ======================
 # Camera initialization
 # ======================
-CAMERA_INDEX = find_available_camera()
+CAMERA_INDEX = None
+while CAMERA_INDEX is None:
+    try:
+        CAMERA_INDEX = find_available_camera()
+    except RuntimeError:
+        print("[WARNING] No camera detected, retrying in 5s "
+              "(preview page stays available)", flush=True)
+        if preview:
+            preview.flash("NO CAMERA")
+        time.sleep(5)
+print(f"[INFO] Using camera index {CAMERA_INDEX}", flush=True)
 cap = cv2.VideoCapture(CAMERA_INDEX)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
@@ -158,6 +197,17 @@ while True:
 
     now = time.time()
 
+    if preview:
+        preview.update(frame, result)
+        if preview.gui_enabled:
+            preview.show()
+        preview.set_state(initialized=is_initialized,
+                          init_left=max(0.0, INITIALIZATION_PERIOD - (now - initialization_start_time)),
+                          threshold=IRIS_CHANGE_THRESHOLD,
+                          cooldown=COOLDOWN_TIME,
+                          last_action=last_action_time,
+                          read_to_bottom=read_to_bottom)
+
     # Check if initialization is completed
     if not is_initialized:
         if now - initialization_start_time >= INITIALIZATION_PERIOD:
@@ -171,6 +221,9 @@ while True:
     face_detected = result.multi_face_landmarks is not None and len(result.multi_face_landmarks) > 0
     
     if not face_detected:
+        if preview:
+            preview.set_state(face=False, screen_off=screen_is_off,
+                              relative_change=None, buffer=[])
         # If face was previously detected but now not detected, start screen off timer
         if not screen_off_sent_time:
             screen_off_sent_time = now
@@ -256,6 +309,14 @@ while True:
             
             # Calculate relative change (compared to reference position)
             relative_change = smooth_iris_y - reference_iris_y
+
+            if preview:
+                preview.set_state(face=True, screen_off=screen_is_off,
+                                  smooth_iris_y=smooth_iris_y,
+                                  reference_iris_y=reference_iris_y,
+                                  relative_change=relative_change,
+                                  buffer=list(eye_movement_buffer),
+                                  read_to_bottom=read_to_bottom)
             
             # Add movement direction to buffer
             if len(eye_movement_buffer) >= BUFFER_SIZE:
