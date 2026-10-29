@@ -1,0 +1,10 @@
+# Runtime artifacts
+logs/
+.run/
+__pycache__/
+*.py[co]
+
+# Local backup / scratch files
+*.bak
+*.bak[0-9]*
+*.upstream_orig
