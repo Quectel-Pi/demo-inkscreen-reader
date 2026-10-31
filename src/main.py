@@ -58,8 +58,14 @@ preview = None
 if os.environ.get("INK_PREVIEW", "1") != "0":
     try:
         import preview_server
-        preview = preview_server.start(int(os.environ.get("INK_PREVIEW_PORT", "8088")))
-        print(f"[INFO] Eye control preview UI listening on port {preview.port}", flush=True)
+        _web = os.environ.get("INK_PREVIEW_WEB", "0") not in ("0", "off", "false", "")
+        preview = preview_server.start(
+            int(os.environ.get("INK_PREVIEW_PORT", "8088")), web=_web)
+        if _web:
+            print(f"[INFO] Eye control preview: web page on port {preview.port}", flush=True)
+        else:
+            print("[INFO] Eye control preview: native window only "
+                  "(set INK_PREVIEW_WEB=1 for the web page)", flush=True)
         _gui = os.environ.get("INK_PREVIEW_GUI", "window").lower()
         _size = os.environ.get("INK_PREVIEW_GUI_SIZE", "720x480").lower()
         try:
@@ -155,7 +161,7 @@ while CAMERA_INDEX is None:
         CAMERA_INDEX = find_available_camera()
     except RuntimeError:
         print("[WARNING] No camera detected, retrying in 5s "
-              "(preview page stays available)", flush=True)
+              "(preview stays available)", flush=True)
         if preview:
             preview.flash("NO CAMERA")
         time.sleep(5)

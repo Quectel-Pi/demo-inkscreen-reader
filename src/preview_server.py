@@ -47,6 +47,7 @@ class Preview:
         self.state_json = {}
         self._flash_cache = ("", 99.0)
         self.gui_enabled = False
+        self.web_enabled = True
         self.gui_mode = "window"
         self.fit_mode = "cover"
         self._last_rect = None
@@ -164,6 +165,31 @@ class Preview:
                 continue
         return 1280, 800
 
+    def _x11_reachable(self):
+        """Try to create a throwaway window in a child process.
+
+        Qt aborts the whole process when it cannot connect to the display, so
+        the probe must not run in ours.
+        """
+        try:
+            pid = os.fork()
+        except Exception:
+            return True                     # cannot fork -> just try
+        if pid == 0:                        # child
+            try:
+                cv2.namedWindow("__probe__", cv2.WINDOW_AUTOSIZE)
+                cv2.imshow("__probe__", np.zeros((8, 8, 3), np.uint8))
+                cv2.waitKey(30)
+                cv2.destroyWindow("__probe__")
+                os._exit(0)
+            except BaseException:
+                os._exit(1)
+        try:
+            _, status = os.waitpid(pid, 0)
+        except Exception:
+            return True
+        return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
     def enable_gui(self, mode="window", fit="cover", size=None, pos=""):
         """Open a native OpenCV window (windowed only - no fullscreen).
 
@@ -174,6 +200,12 @@ class Preview:
         self.fit_mode = (fit or "cover").lower()
         if mode in ("0", "off", "none", "false"):
             self.gui_enabled = False
+            return False
+        if not self._x11_reachable():
+            self.gui_enabled = False
+            print("[WARN] Native preview window skipped: cannot connect to the X "
+                  "display (DISPLAY=%r). The demo keeps running without a window."
+                  % os.environ.get("DISPLAY"), flush=True)
             return False
         try:
             pw, ph = self._panel_size()
@@ -294,7 +326,10 @@ class Preview:
             else:
                 time.sleep(0.2)
 
-    def start(self):
+    def start(self, web=True):
+        self.web_enabled = bool(web)
+        if not self.web_enabled:
+            return self              # native window only, no HTTP server
         threading.Thread(target=self._run_encoder, daemon=True).start()
         handler = _make_handler(self)
         srv = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
@@ -381,5 +416,5 @@ def is_enabled():
     return os.environ.get("INK_PREVIEW", "0") != "0"
 
 
-def start(port=8088):
-    return Preview(port).start()
+def start(port=8088, web=True):
+    return Preview(port).start(web=web)
