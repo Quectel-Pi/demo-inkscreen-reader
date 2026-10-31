@@ -29,6 +29,10 @@ Restart=on-failure
 RestartSec=10
 TimeoutStopSec=10
 Environment="DISPLAY=:0"
+# The service has no access to the desktop session's XAUTHORITY, so the native
+# preview window cannot be created on boot - keep it off (use ./build.sh manually
+# or set INK_PREVIEW_WEB=1 if you want the web preview instead).
+Environment="INK_PREVIEW_GUI=0"
 SupplementaryGroups=video
 
 [Install]
