@@ -21,13 +21,26 @@ In terms of display, the system adopts a partial refresh and partition rendering
 | **Page Memory** | Supports returning to previous pages with pixel-level consistency, accurately recording reading position |
 | **Multi-book Management** | Supports switching between different books via long-press physical buttons |
 | **Efficient Refresh** | Uses partial refresh technology to reduce flickering and improve refresh speed |
+| **Preview UI** | Camera view overlaid with eye/iris landmarks and the live tracking state, available both as a native window and as a browser (MJPEG) stream |
+| **Clear Panel on Exit** | The e-Paper panel is wiped automatically when the program stops, leaving no ghost image |
 
 ## 👁️ Eye-tracking Control Instructions
 
 ### Startup Process
-1. Run `./build.sh`, the script simultaneously launches the eye-tracking script and e-ink display program
-2. The camera automatically detects available devices and begins monitoring eye movements
+1. Run `./build.sh`. The script first stops any instance left over from a previous run (single-instance guard, recorded in `.run/build.pid`, waiting up to 25 seconds so the panel can finish clearing), then launches the eye-tracking script and the e-ink display program
+2. The camera automatically detects available devices and begins monitoring eye movements; if no camera is plugged in the program no longer exits - it retries every 5 seconds
 3. Initialization takes 4 seconds - maintain normal reading posture during this period
+4. Preview: a 720x480 "Eye Control Preview" window opens on the device screen (see the "Preview UI" section below); the web preview is disabled by default, enable it with `INK_PREVIEW_WEB=1`
+
+### Stopping and Clearing the Panel
+Any of the following stops both the eye-tracking and the e-ink program and wipes the e-Paper panel (no leftover page is kept):
+
+| Action | Description |
+|--------|-------------|
+| `Ctrl+C` in the terminal | while `build.sh` is running |
+| `X` button of the preview window | closing the window stops the whole demo |
+| `q` / `Esc` inside the preview window | same as above |
+| `./build.sh stop` | stop from the command line, without opening the window |
 
 ### Page Turning Operations
 - **Next Page**: Maintain a reading posture and read at a normal pace, starting from the top of the screen and moving downwards. When your gaze reaches the bottom of the screen, simply shift your eyes back to the top to trigger the page turn
@@ -38,6 +51,38 @@ In terms of display, the system adopts a partial refresh and partition rendering
 - **Auto Screen Off**: Automatically sends screen-off signal after 60 seconds of no face detection
 - **Auto Wake-up**: Automatically wakes the screen when face is detected again
 - **Event Cleanup**: Clears input events during screen-off period upon wake-up to prevent accidental page turns
+
+## 🖥️ Preview UI
+
+The live camera view and the current tracking decision can be watched while tuning the eye tracking. Both options can be used at the same time:
+
+| Mode | Address / action | Notes |
+|------|------------------|-------|
+| Native window | opens automatically on `./build.sh`, 720x480 | closing it (`X`) or pressing `q` / `Esc` stops the whole demo and clears the panel |
+| Browser (LAN, off by default) | with `INK_PREVIEW_WEB=1`, open `http://<device-ip>:8088` | `/` is the live stream, plus `/snapshot.jpg` (single frame) and `/state` (JSON) |
+
+Overlay: green polygons are the left/right eye contours, red circles the iris centres; the top bar shows the FACE state, the bottom bar shows `irisY / reference / delta / threshold`, the 5-frame direction buffer and page-turn triggers.
+
+Everything is configurable through optional environment variables:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `INK_PREVIEW` | `1` | set to `0` to disable the preview completely (original headless behaviour) |
+| `INK_PREVIEW_PORT` | `8088` | HTTP preview port |
+| `INK_PREVIEW_WEB` | `0` | set to `1` to enable the web preview; by default only the native window is used |
+| `INK_PREVIEW_GUI` | `window` | set to `0` or `off` to skip the native window and keep only the web page |
+| `INK_PREVIEW_GUI_SIZE` | `720x480` | native window size |
+| `INK_PREVIEW_GUI_POS` | centred | native window position, e.g. `280x160` |
+| `INK_PREVIEW_GUI_FIT` | `cover` | `cover` fills and crops / `contain` shows the full frame with bars / `stretch` distorts |
+
+```bash
+INK_PREVIEW=0 ./build.sh                   # no preview UI at all
+INK_PREVIEW_WEB=1 ./build.sh               # additionally enable the web preview (off by default)
+INK_PREVIEW_GUI_SIZE=960x720 ./build.sh    # different window size
+INK_PREVIEW_GUI_FIT=contain ./build.sh     # full 4:3 frame, black bars on the sides
+```
+
+> The native window needs a graphical session (non-empty `DISPLAY`); when started from `adb shell` or any other environment without `DISPLAY`, the window is skipped and only the web preview stays available.
 
 ## ⌨️ Physical Button Functions
 
@@ -152,6 +197,16 @@ sudo systemctl stop inkscreen-reader
 sudo systemctl disable inkscreen-reader
 ```
 
+### Preview UI When Auto-starting
+
+The systemd unit generated by `setup_autostart.sh` sets `Environment="INK_PREVIEW_GUI=0"`, so **no preview window is opened on boot**.
+
+The service has no access to the desktop session's `XAUTHORITY` (Xwayland uses `/run/user/<uid>/.mutter-Xwaylandauth.XXXXXX`, which changes on every login), so the window cannot be created.
+
+- Reading itself is not affected - no preview is needed for normal use
+- To watch the preview, just run `./build.sh` manually in a desktop terminal
+- To watch it remotely at boot instead, replace `INK_PREVIEW_GUI=0` in the unit with `INK_PREVIEW_WEB=1` and open `http://<device-ip>:8088`
+
 ### Font Generation (Optional)
 
 If you need custom fonts, use `tools/generate_noto_font12cn.py` to extract a bitmap font of a specified size from a Chinese font file.
@@ -184,7 +239,9 @@ demo-inkscreen-reader/
 │               └── pic/
 │                   └── 2.bmp              # Screen-off image
 ├── src/
-│   └── main.py                            # Python eye-tracking main program
+│   ├── main.py                            # Python eye-tracking main program
+│   └── preview_server.py                  # Preview UI (MJPEG web page / native window)
+├── .run/                                  # Runtime directory (build.pid, git-ignored)
 └── tools/
     └── generate_noto_font12cn.py          # Font generation tool
 ```
@@ -199,6 +256,10 @@ demo-inkscreen-reader/
 | Screen no display or abnormal | Check SPI connection stability and GPIO configuration |
 | Buttons not working | Use `cat /proc/bus/input/devices` to find event device and check permissions |
 | Compilation failure | Check cross-compilation toolchain existence and path |
+| Web preview unreachable | The web preview is off by default - start with `INK_PREVIEW_WEB=1 ./build.sh`; then check the port with `ss -ltnp \| grep 8088` (run `./build.sh stop` if an old instance holds it) |
+| No preview window appears | A graphical session is required (`echo $DISPLAY` must be non-empty); starting from `adb shell` skips the window automatically |
+| Preview image is cropped | The camera is 4:3 while the window is 3:2 - use `INK_PREVIEW_GUI_FIT=contain` to see the full frame |
+| Port / SPI conflict after restart | Handled by the single-instance guard; if it still happens, run `./build.sh stop` before starting |
 
 ## Reporting Issues
 We welcome Issues and Pull Requests to improve this project.

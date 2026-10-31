@@ -21,6 +21,17 @@
 #include <poll.h>
 #include <ctype.h>
 #include <iconv.h>
+#include <signal.h>
+
+// EPD_CLEAR_ON_EXIT: set by SIGINT/SIGTERM so the main loop can shut down
+// cleanly and wipe the panel before the process goes away.
+static volatile sig_atomic_t g_epd_quit = 0;
+
+static void epd_request_quit(int signo)
+{
+    (void)signo;
+    g_epd_quit = 1;
+}
 
 // Define custom screen off and on signals
 #define CUSTOM_SCREEN_OFF_BTN BTN_LEFT
@@ -1528,6 +1539,10 @@ void handle_keys(void) {
 // Main function
 void EPD_7in5_V2_reader_txt(void) {
     printf("[DEBUG] EPD_7in5_V2_reader_txt started\n");
+    // Catch Ctrl+C / systemd stop so we can clear the panel
+    signal(SIGINT,  epd_request_quit);
+    signal(SIGTERM, epd_request_quit);
+    signal(SIGHUP,  epd_request_quit);
     printf("E-Ink Reader: Full Continuity, No Truncation, Exact Page History\n");
 
 #ifndef QUECPI
@@ -1657,6 +1672,11 @@ void EPD_7in5_V2_reader_txt(void) {
 
     printf("Reader started. Books: %d\n", book_count);
     while (1) {
+        if (g_epd_quit) {
+            printf("[INFO] Stop signal received, leaving reader loop\n");
+            fflush(stdout);
+            break;
+        }
         handle_keys(); // Handle physical keys and virtual eye control keys
         usleep(50000);
     }
@@ -1670,5 +1690,15 @@ cleanup:
     if (key1_fd >= 0) close(key1_fd);
     if (key2_fd >= 0) close(key2_fd);
     if (eye_key_fd >= 0) close(eye_key_fd);
+    if (g_epd_quit) {
+        // Wipe the panel: full init + clear so the screen does not keep
+        // the last page burned in after the program stops.
+        printf("[INFO] Clearing e-Paper display...\n");
+        fflush(stdout);
+        EPD_7IN5_V2_Init();
+        EPD_7IN5_V2_Clear();
+        printf("[INFO] e-Paper cleared, going to sleep\n");
+        fflush(stdout);
+    }
     EPD_7IN5_V2_Sleep();
 }
