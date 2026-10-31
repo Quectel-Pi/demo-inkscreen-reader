@@ -31,7 +31,7 @@
 1. 运行 `./build.sh`。脚本会先停掉上一次残留的实例（单实例守卫，记录在 `.run/build.pid`，最多等 25 秒让墨水屏刷完），然后同时启动眼动追踪和墨水屏显示程序
 2. 摄像头自动检测可用设备并开始监测眼部运动；未接摄像头时程序不再退出，每 5 秒重试一次
 3. 初始化需要 4 秒 —— 此期间请保持正常阅读姿势
-4. 预览界面：设备屏幕会自动弹出 720×480 的「Eye Control Preview」窗口；同一网络下也可用浏览器访问 `http://<设备IP>:8088`（详见下文「预览界面」一节）
+4. 预览界面：设备屏幕会自动弹出 720×480 的「Eye Control Preview」窗口（详见下文「预览界面」一节）；网页预览默认关闭，需要时用 `INK_PREVIEW_WEB=1` 开启
 
 ### 停止与清屏
 以下任一方式都会退出眼动追踪 + 墨水屏程序，并把墨水屏**整屏刷白**（不会残留最后一页）：
@@ -60,7 +60,7 @@
 | 方式 | 地址 / 操作 | 说明 |
 |------|-------------|------|
 | 设备原生窗口 | `./build.sh` 启动后自动弹出，720×480 | 关闭窗口（`X`）、按 `q` 或 `Esc` 会停止整套程序并刷白墨水屏 |
-| 浏览器（局域网） | `http://<设备IP>:8088` | `/` 为实时流，另有 `/snapshot.jpg`（单帧）和 `/state`（JSON 状态） |
+| 浏览器（局域网，默认关闭） | 设 `INK_PREVIEW_WEB=1` 后访问 `http://<设备IP>:8088` | `/` 为实时流，另有 `/snapshot.jpg`（单帧）和 `/state`（JSON 状态） |
 
 画面内容：绿色多边形为左右眼轮廓，红色圆圈为虹膜中心；顶部显示 FACE 状态，底部显示 `irisY / 参考值 / 偏差 / 阈值`、5 帧方向缓冲和翻页触发提示。
 
@@ -70,6 +70,7 @@
 |------|--------|------|
 | `INK_PREVIEW` | `1` | 设为 `0` 完全关闭预览（回到无界面的原始行为） |
 | `INK_PREVIEW_PORT` | `8088` | 网页预览端口 |
+| `INK_PREVIEW_WEB` | `0` | 设为 `1` 才启用网页预览；默认只用原生窗口 |
 | `INK_PREVIEW_GUI` | `window` | 设为 `0` 或 `off` 时不弹原生窗口，只保留网页 |
 | `INK_PREVIEW_GUI_SIZE` | `720x480` | 原生窗口尺寸 |
 | `INK_PREVIEW_GUI_POS` | 居中 | 原生窗口位置，例如 `280x160` |
@@ -77,7 +78,7 @@
 
 ```bash
 INK_PREVIEW=0 ./build.sh                   # 不要任何预览界面
-INK_PREVIEW_GUI=0 ./build.sh               # 只要网页预览
+INK_PREVIEW_WEB=1 ./build.sh               # 额外开启网页预览（默认关闭）
 INK_PREVIEW_GUI_SIZE=960x720 ./build.sh    # 换个窗口尺寸
 INK_PREVIEW_GUI_FIT=contain ./build.sh     # 显示完整画面（4:3），两侧留黑边
 ```
@@ -197,6 +198,16 @@ sudo systemctl stop inkscreen-reader
 sudo systemctl disable inkscreen-reader
 ```
 
+### 开机自启动时的预览界面说明
+
+`setup_autostart.sh` 生成的 systemd 服务里设置了 `Environment="INK_PREVIEW_GUI=0"`，**开机自启时不会弹出预览窗口**。
+
+原因是 systemd 服务拿不到桌面会话的 `XAUTHORITY`（Xwayland 的授权文件是 `/run/user/<uid>/.mutter-Xwaylandauth.XXXXXX`，每次登录都会变），窗口无法创建。
+
+- 开机场景下本来也不需要看画面，阅读功能不受影响
+- 需要看预览时，在桌面终端手动运行 `./build.sh` 即可（会自动弹窗）
+- 如果自启动时也想远程看画面，把服务里的 `INK_PREVIEW_GUI=0` 改成 `INK_PREVIEW_WEB=1`，然后用浏览器访问 `http://<设备IP>:8088`
+
 ### 字体生成（可选）
 
 如需自定义字体，可使用 `tools/generate_noto_font12cn.py` 从中文字体文件提取指定大小的点阵字库。
@@ -244,7 +255,7 @@ demo-inkscreen-reader/
 | 屏幕无显示或异常 | 检查SPI连接是否牢固，GPIO配置是否正确 |
 | 按键无效 | 使用 `cat /proc/bus/input/devices` 查找event设备并确认权限 |
 | 编译失败 | 检查交叉编译工具链是否存在且路径正确 |
-| 网页预览打不开 | 用 `ss -ltnp \| grep 8088` 确认端口在监听；被旧实例占用时先执行 `./build.sh stop` |
+| 网页预览打不开 | 网页预览默认关闭，需用 `INK_PREVIEW_WEB=1 ./build.sh` 启动；开启后可用 `ss -ltnp \| grep 8088` 确认端口，被旧实例占用时先 `./build.sh stop` |
 | 不弹预览窗口 | 需要图形会话（`echo $DISPLAY` 非空）。从 `adb shell` 等无 `DISPLAY` 的环境启动会自动跳过窗口 |
 | 预览画面被裁切 | 摄像头是 4:3、窗口是 3:2，用 `INK_PREVIEW_GUI_FIT=contain` 可完整显示 |
 | 重启后端口/SPI 冲突 | 已由单实例守卫自动处理；若仍报错，先 `./build.sh stop` 再启动 |
