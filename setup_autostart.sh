@@ -4,8 +4,14 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_NAME="${SUDO_USER:-$USER}"
 SERVICE_NAME="inkscreen-reader"
+EPD_BIN="$PROJECT_DIR/components/e-Paper/Quectel-Pi-H1/c/epd"
 
 echo "=== Configure $SERVICE_NAME autostart service ==="
+
+# Grant NOPASSWD sudo for EPD binary (required for systemd service)
+SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}"
+echo "$USER_NAME ALL=(root) NOPASSWD: $EPD_BIN" | sudo tee "$SUDOERS_FILE" > /dev/null
+sudo chmod 0440 "$SUDOERS_FILE"
 
 # Create the systemd service file
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -23,6 +29,10 @@ Restart=on-failure
 RestartSec=10
 TimeoutStopSec=10
 Environment="DISPLAY=:0"
+# The service has no access to the desktop session's XAUTHORITY, so the native
+# preview window cannot be created on boot - keep it off (use ./build.sh manually
+# or set INK_PREVIEW_WEB=1 if you want the web preview instead).
+Environment="INK_PREVIEW_GUI=0"
 SupplementaryGroups=video
 
 [Install]
